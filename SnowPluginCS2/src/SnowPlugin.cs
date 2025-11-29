@@ -5,30 +5,15 @@ using CounterStrikeSharp.API.Modules.Commands;
 using CounterStrikeSharp.API.Modules.Utils;
 using System.IO;
 using System.Text.Json;
-using System.Text.Json.Serialization;
 
-namespace SnowPlugin;
-
-public class SnowConfig : BasePluginConfig
-{
-    [JsonPropertyName("particle_name")]
-    public string ParticleName { get; set; } = "particles/snow.vpcf"; //specify the path to the file specified when publishing the add-on in the workshop
-
-    [JsonPropertyName("offset_z")]
-    public float OffsetZ { get; set; } = 200.0f;
-}
-
-public class SnowData
-{
-    public Dictionary<ulong, bool> PlayerPreferences { get; set; } = new();
-}
+namespace SnowPluginCS2;
 
 public class SnowPlugin : BasePlugin, IPluginConfig<SnowConfig>
 {
     public override string ModuleName => "Snow Plugin";
-    public override string ModuleVersion => "1.0.0";
+    public override string ModuleVersion => "1.2.0";
     public override string ModuleAuthor => "ALBAN1776";
-    public override string ModuleDescription => "Creates snow particle";
+    public override string ModuleDescription => "Creates snow particle with localization support";
 
     public SnowConfig Config { get; set; } = new();
     private SnowData _data = new();
@@ -100,7 +85,7 @@ public class SnowPlugin : BasePlugin, IPluginConfig<SnowConfig>
 
         if (GetPlayerSnowState(player.SteamID))
         {
-            AddTimer(0.2f, () => CreateSnow(player));
+            AddTimer(0.3f, () => CreateSnow(player));
         }
 
         return HookResult.Continue;
@@ -118,16 +103,19 @@ public class SnowPlugin : BasePlugin, IPluginConfig<SnowConfig>
         _data.PlayerPreferences[player.SteamID] = newState;
         SaveData();
 
+        string message = newState ? Localizer["snow.enabled"] : Localizer["snow.disabled"];
+
         if (newState)
         {
-            CreateSnow(player);
-            player.PrintToChat($" {ChatColors.Green}[Snow] {ChatColors.White}Effect {ChatColors.Green}Enabled");
+            RemoveSnow(player.Slot);
+            AddTimer(0.2f, () => CreateSnow(player));
         }
         else
         {
             RemoveSnow(player.Slot);
-            player.PrintToChat($" {ChatColors.Red}[Snow] {ChatColors.White}Effect {ChatColors.Red}Disabled");
         }
+
+        player.PrintToChat(message);
     }
 
     private bool GetPlayerSnowState(ulong steamId)
@@ -141,23 +129,31 @@ public class SnowPlugin : BasePlugin, IPluginConfig<SnowConfig>
 
     private void CreateSnow(CCSPlayerController player)
     {
-        if (player.PlayerPawn == null || !player.PlayerPawn.IsValid) return;
+        if (player?.PlayerPawn?.Value == null || !player.PlayerPawn.IsValid) return;
         var pawn = player.PlayerPawn.Value;
+        if (!pawn.IsValid) return;
+
+        RemoveSnow(player.Slot);
 
         var particle = Utilities.CreateEntityByName<CParticleSystem>("info_particle_system");
         if (particle == null) return;
 
-        Vector pos = pawn.AbsOrigin!;
-        pos.Z += Config.OffsetZ;
+        particle.EffectName = Config.ParticleName;
 
+        Vector pos = pawn.AbsOrigin!;
         QAngle ang = pawn.AbsRotation!;
 
-        particle.EffectName = Config.ParticleName;
-        particle.StartActive = true;
-
-        particle.Teleport(pos, ang, null);
+        particle.Teleport(pos, ang, new Vector(0, 0, 0));
         particle.DispatchSpawn();
-        particle.AcceptInput("SetParent", pawn, null, "!activator");
+
+        Server.NextFrame(() =>
+        {
+            if (particle != null && particle.IsValid && pawn.IsValid)
+            {
+                particle.AcceptInput("SetParent", pawn, null, "!activator");
+                particle.AcceptInput("Start");
+            }
+        });
 
         _activeParticles[player.Slot] = particle.Index;
     }
@@ -169,7 +165,7 @@ public class SnowPlugin : BasePlugin, IPluginConfig<SnowConfig>
             var entity = Utilities.GetEntityFromIndex<CParticleSystem>((int)entIndex);
             if (entity != null && entity.IsValid)
             {
-                entity.AcceptInput("Stop", null, null, null);
+                entity.AcceptInput("Stop");
                 entity.Remove();
             }
             _activeParticles.Remove(slot);
